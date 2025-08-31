@@ -1,6 +1,7 @@
 const WebSocket = require("ws");
 const Docker = require("dockerode");
 const pty = require("node-pty");
+const { PassThrough } = require("stream");
 
 const wss = new WebSocket.Server({ port: 3000 });
 const docker = new Docker();
@@ -16,7 +17,7 @@ wss.on("connection", async (ws) => {
         });
         await container.start();
 
-        const exexc = await container.exec({
+        const exec = await container.exec({
             Cmd: ["/bin/bash"],
             AttachStdin: true,
             AttachStdout: true,
@@ -24,17 +25,17 @@ wss.on("connection", async (ws) => {
             Tty: true,
         });
 
-        const stream = await exexc.start({ hijack: true, stdin: true });
+        const stream = await exec.start({ hijack: true, stdin: true });
 
-        const term = pty.spawn("/bin/cat", [], {
-            name: "xterm-color",
-            cols: 80,
-            rows: 30,
-            cwd: process.env.HOME,
-            env: process.env,
-        })
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        container.modem.demuxStream(stream, stdout, stderr);
 
-        stream.on("data", (data) => {
+        stdout.on("data", (data) => {
+            ws.send(data.toString("utf-8"));
+        });
+
+        stderr.on("data", (data) => {
             ws.send(data.toString("utf-8"));
         });
 
@@ -43,7 +44,6 @@ wss.on("connection", async (ws) => {
         });
 
         ws.on("close", async () => {
-            stream.end();
             await container.stop();
             await container.remove();
         });
